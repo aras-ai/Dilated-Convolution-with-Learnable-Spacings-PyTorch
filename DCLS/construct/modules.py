@@ -18,7 +18,7 @@ from torch.nn import init
 from torch.nn.modules import Module
 from torch.nn.modules.utils import _single, _pair, _triple, _reverse_repeat_tuple
 from torch.nn.common_types import _size_1_t, _size_2_t, _size_3_t
-from torch.autograd import Function
+torch.autograd import Function
 from typing import Optional, List, Tuple
 import logging
 
@@ -459,27 +459,6 @@ class ConstructKernel2d(Module):
         K = (X * W).sum(-1)
         K = K.permute(2, 3, 0, 1)
         return K
-
-    def forward(self, W, P, SIG):
-        self.__init_tmp_variables__(W.device)
-        if self.version == "v0":
-            return self.forward_v0(W, P)
-        elif self.version == "v1":
-            return self.forward_v1(W, P)
-        elif self.version == "max":
-            return self.forward_vmax(W, P, SIG)
-        elif self.version == "gauss":
-            return self.forward_vgauss(W, P, SIG)
-        else:
-            raise
-
-    def extra_repr(self):
-        s = "{in_channels}, {out_channels}, kernel_count={kernel_count}, version={version}"
-        if self.dilated_kernel_size:
-            s += ", dilated_kernel_size={dilated_kernel_size}"
-        if self.groups != 1:
-            s += ", groups={groups}"
-        return s.format(**self.__dict__)
     
     def forward_vround(self, weight, offset):
         B, H, W = offset.size()
@@ -502,6 +481,29 @@ class ConstructKernel2d(Module):
             kernel[b, grid[b, :, :, 0], grid[b, :, :, 1]] = weight[b]
 
         return kernel
+
+    def forward(self, W, P, SIG):
+        self.__init_tmp_variables__(W.device)
+        if self.version == "vround":
+            return self.forward_vround(W, P)
+        elif self.version == "v0":
+            return self.forward_v0(W, P)
+        elif self.version == "v1":
+            return self.forward_v1(W, P)
+        elif self.version == "max":
+            return self.forward_vmax(W, P, SIG)
+        elif self.version == "gauss":
+            return self.forward_vgauss(W, P, SIG)
+        else:
+            raise
+
+    def extra_repr(self):
+        s = "{in_channels}, {out_channels}, kernel_count={kernel_count}, version={version}"
+        if self.dilated_kernel_size:
+            s += ", dilated_kernel_size={dilated_kernel_size}"
+        if self.groups != 1:
+            s += ", groups={groups}"
+        return s.format(**self.__dict__)
 
 class ConstructKernel3d(Module):
     def __init__(
