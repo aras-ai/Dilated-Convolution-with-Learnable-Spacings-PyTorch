@@ -18,9 +18,10 @@ from torch.nn import init
 from torch.nn.modules import Module
 from torch.nn.modules.utils import _single, _pair, _triple, _reverse_repeat_tuple
 from torch.nn.common_types import _size_1_t, _size_2_t, _size_3_t
-torch.autograd import Function
 from typing import Optional, List, Tuple
 import logging
+
+from DCLS.construct.helpers import StraightThroughEstimator
 
 global install_implicit_gemm
 try:
@@ -342,16 +343,6 @@ class ConstructKernel1d(Module):
             s += ", groups={groups}"
         return s.format(**self.__dict__)
 
-class RoundSTE(Function):
-    @staticmethod
-    def forward(ctx, input):
-        return input.round()
-    
-    @staticmethod
-    def backward(ctx, grad_output):
-        return grad_output
-    
-round_ste = RoundSTE.apply
 
 class ConstructKernel2d(Module):
     def __init__(
@@ -372,6 +363,7 @@ class ConstructKernel2d(Module):
         self.kernel_count = kernel_count
         self.IDX = None
         self.lim = None
+        self.STE = StraightThroughEstimator()
 
     def __init_tmp_variables__(self, device):
         if self.IDX is None or self.lim is None:
@@ -402,6 +394,15 @@ class ConstructKernel2d(Module):
             ).permute(3, 0, 1, 2)
         else:
             pass
+
+    def forward_v1_ste(self, W, P):
+        P = P + self.lim // 2
+        X = self.IDX - P
+        X = self.STE(1 - X.abs()).prod(2)
+        X = X / (X.sum((0, 1)) + 1e-7)  # normalization
+        K = (X * W).sum(-1)
+        K = K.permute(2, 3, 0, 1)
+        return K
 
     def forward_v0(self, W, P):
         P = P + self.lim // 2
@@ -459,37 +460,15 @@ class ConstructKernel2d(Module):
         K = (X * W).sum(-1)
         K = K.permute(2, 3, 0, 1)
         return K
-    
-    def forward_vround(self, weight, offset):
-        B, H, W = offset.size()
-        offset = round_ste(offset)
-        x_offset = offset[:, :, 0].view(B, H, W, 1)
-        y_offset = offset[:, :, 1].view(B, H, W, 1)
-
-        x = torch.arange(0, H, device=offset.device).view(1, H, 1)
-        y = torch.arange(0, W, device=offset.device).view(1, 1, W)
-
-        x = torch.clamp(x, 0, H - 1)
-        y = torch.clamp(y, 0, W - 1)
-
-        grid = torch.stack((x, y), dim=-1).view(B, H, W, 2)
-        grid = grid.long()
-
-        kernel = torch.zeros.like(weight)
-
-        for b in range(B):
-            kernel[b, grid[b, :, :, 0], grid[b, :, :, 1]] = weight[b]
-
-        return kernel
 
     def forward(self, W, P, SIG):
         self.__init_tmp_variables__(W.device)
-        if self.version == "vround":
-            return self.forward_vround(W, P)
-        elif self.version == "v0":
+        if self.version == "v0":
             return self.forward_v0(W, P)
         elif self.version == "v1":
             return self.forward_v1(W, P)
+        elif self.version == "v1ـste":
+            return self.forward_v1_ste(W, P)
         elif self.version == "max":
             return self.forward_vmax(W, P, SIG)
         elif self.version == "gauss":
@@ -504,6 +483,7 @@ class ConstructKernel2d(Module):
         if self.groups != 1:
             s += ", groups={groups}"
         return s.format(**self.__dict__)
+
 
 class ConstructKernel3d(Module):
     def __init__(
