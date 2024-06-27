@@ -395,15 +395,6 @@ class ConstructKernel2d(Module):
         else:
             pass
 
-    def forward_v1_ste(self, W, P):
-        P = P + self.lim // 2
-        X = self.IDX - P
-        X = self.STE(1 - X.abs()).prod(2)
-        X = X / (X.sum((0, 1)) + 1e-7)  # normalization
-        K = (X * W).sum(-1)
-        K = K.permute(2, 3, 0, 1)
-        return K
-
     def forward_v0(self, W, P):
         P = P + self.lim // 2
         Pr = P
@@ -427,6 +418,22 @@ class ConstructKernel2d(Module):
         W3 = torch.where(cond3 * cond2, 1.0, 0.0)
         W4 = torch.where(cond3 * cond4, 1.0, 0.0)
         K = W1 + R1R2 * (W1 - W2 - W3 + W4) + R1 * (W3 - W1) + R2 * (W2 - W1)
+        K = W * K
+        K = K.sum(4)
+        K = K.permute(2, 3, 0, 1)
+        return K
+
+    def forward_v0_ste(self, W, P):
+        P = P + self.lim // 2
+        P = self.STE(P)
+        P1 = P.select(0, 0)
+        I = self.IDX.select(2, 1)
+        P2 = P.select(0, 1)
+        J = self.IDX.select(2, 0)
+        cond1 = I == P1
+        cond2 = J == P2
+        W1 = torch.where(cond1 * cond2, 1.0, 0.0)
+        K = W1
         K = W * K
         K = K.sum(4)
         K = K.permute(2, 3, 0, 1)
@@ -465,10 +472,10 @@ class ConstructKernel2d(Module):
         self.__init_tmp_variables__(W.device)
         if self.version == "v0":
             return self.forward_v0(W, P)
+        elif self.version == "v0_ste":
+            return self.forward_v0_ste(W, P)
         elif self.version == "v1":
             return self.forward_v1(W, P)
-        elif self.version == "v1ـste":
-            return self.forward_v1_ste(W, P)
         elif self.version == "max":
             return self.forward_vmax(W, P, SIG)
         elif self.version == "gauss":
